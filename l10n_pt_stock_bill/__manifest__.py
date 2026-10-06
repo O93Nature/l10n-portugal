@@ -5,7 +5,7 @@
     "name": "Portugal Bill Legal Transport Documents",
     "summary": "Portuguese legal transport and shipping documents"
     " (Guias de Transporte e Guias de Remessa) generated with Bill",
-    "version": "19.0.1.0.0",
+    "version": "20.0.1.0.0",
     "author": "Open Source Integrators, Odoo Community Association (OCA)",
     "license": "AGPL-3",
     "website": "https://github.com/OCA/l10n-portugal",

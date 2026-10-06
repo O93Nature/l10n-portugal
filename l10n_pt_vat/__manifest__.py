@@ -3,7 +3,7 @@
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 {
     "name": "Portugal - IVA",
-    "version": "19.0.1.0.0",
+    "version": "20.0.1.0.0",
     "license": "AGPL-3",
     "author": "Open Source Integrators, Sossia, Odoo Community Association (OCA)",
     "summary": "Portuguese VAT requirements extensions",
@@ -13,7 +13,6 @@
     "development_status": "Production/Stable",
     "depends": ["account", "l10n_pt"],
     "data": [
-        "security/ir.model.access.csv",
         "data/account.l10n_pt.vat.exempt.reason.csv",
         "data/vat_adjustment_norm.xml",
         "views/account_journal_view.xml",
@@ -21,6 +20,7 @@
         "views/account_tax_view.xml",
         "views/l10n_pt_vat_exempt_reason_view.xml",
         "views/vat_adjustment_norm_view.xml",
+        'security/ir.access.csv',
     ],
     "installable": True,
     "auto_install": True,

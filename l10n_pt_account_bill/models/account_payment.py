@@ -65,11 +65,12 @@ class AccountPayment(models.Model):
         if not customer.bill_id:
             customer.set_bill_contact()
         items = self._prepare_receipt_lines()
+        # Campos do funeral (defunct, funeral_datetime) vem do funeral_manager
         funeral_data = self.reconciled_invoice_ids.process
         receipt_data = {
             "tipo_documento_id": 28,
             "contato_id": int(customer.bill_id),
-            "observacoes": "Despesas referentes ao funeral do(a) Exmo.(a) Senhor(a) %s.\n Processo: %s \n Data do Funeral: %s"%(funeral_data.defunct.name, funeral_data.process, funeral_data.funeral_datetime.strftime('%d-%m-%Y') if funeral_data.funeral_datetime else ''),
+            "observacoes": "Despesas referentes ao funeral do(a) Exmo.(a) Senhor(a) %s.\n Processo: %s \n Data do Funeral: %s"%(funeral_data.defunct.name, funeral_data.process, funeral_data.funeral_datetime.strftime('%d-%m-%Y') if funeral_data.funeral_datetime else '') if "defunct" in funeral_data._fields else "",
         }
         
         receipt_data.update(items)

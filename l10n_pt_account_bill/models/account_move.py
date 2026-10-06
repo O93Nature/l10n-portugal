@@ -168,6 +168,8 @@ class AccountMove(models.Model):
         tipificacao = self._get_bill_prefix(self.bill_doc_type)
 
         funeral_data = self.env['sale.order'].search([('name', '=', self.invoice_origin)], limit=1)
+        # Campos do funeral (defunct, funeral_datetime) vem do funeral_manager
+        is_funeral = "defunct" in funeral_data._fields
 
         invoice_data = {
             #"data": self.invoice_date.strftime("%Y-%m-%d %H:%m:%s"),
@@ -177,7 +179,7 @@ class AccountMove(models.Model):
             #"tipo_documento_id": 1,
             #"contato_id": customer_vals['codigo'],
             #"contato[nome]": customer_vals['nome'],
-            "observacoes": "Despesas referentes ao funeral do(a) Exmo.(a) Senhor(a) %s.\n Processo: %s \n Data do Funeral: %s"%(funeral_data.defunct.name, funeral_data.process, funeral_data.funeral_datetime.strftime('%d-%m-%Y') if funeral_data.funeral_datetime else '')
+            "observacoes": "Despesas referentes ao funeral do(a) Exmo.(a) Senhor(a) %s.\n Processo: %s \n Data do Funeral: %s"%(funeral_data.defunct.name, funeral_data.process, funeral_data.funeral_datetime.strftime('%d-%m-%Y') if funeral_data.funeral_datetime else '') if is_funeral else ""
             #"proprietary_uid": proprietary_uid,
         }
 
@@ -250,7 +252,8 @@ class AccountMove(models.Model):
                 invoice.payment_reference = self.invoice_origin
                 funeral_data = self.env['sale.order'].search([('name', '=', self.invoice_origin)], limit=1)
                 invoice.process = funeral_data
-                invoice.defunct = funeral_data.defunct.name
+                if "defunct" in funeral_data._fields:
+                    invoice.defunct = funeral_data.defunct.name
             
             invoice.name = invx_number
             invoice._update_bill_status()
@@ -341,7 +344,7 @@ class AccountPaymentRegister(models.TransientModel):
         if not payments['payment_state']:
             payments.action_create_bill_receipt()
 
-        if self._context.get('dont_redirect_to_payments'):
+        if self.env.context.get('dont_redirect_to_payments'):
             return True
 
         action = {
@@ -357,7 +360,7 @@ class AccountPaymentRegister(models.TransientModel):
             })
         else:
             action.update({
-                'view_mode': 'tree,form',
+                'view_mode': 'list,form',
                 'domain': [('id', 'in', payments.ids)],
             })
         return action
