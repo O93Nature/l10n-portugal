@@ -116,7 +116,7 @@ class AccountPayment(models.Model):
         attachment = self.env['ir.attachment'].create({
             'name': '{}.pdf'.format(values.get('invoice_number')),
             'type': 'binary',
-            'datas': base64.b64encode(content),
+            'raw': content,
             'res_model': 'account.payment',
             'res_id': self.id,
             'mimetype': 'application/pdf'
@@ -125,7 +125,7 @@ class AccountPayment(models.Model):
         attachment = self.env['ir.attachment'].create({
             'name': '{}.pdf'.format(values.get('invoice_number')),
             'type': 'binary',
-            'datas': base64.b64encode(content),
+            'raw': content,
             'res_model': 'account.move',
             'res_id': self.reconciled_invoice_ids.id,
             'mimetype': 'application/pdf'

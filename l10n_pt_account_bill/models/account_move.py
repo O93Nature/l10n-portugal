@@ -266,7 +266,7 @@ class AccountMove(models.Model):
             attachment = self.env['ir.attachment'].create({
                 'name': '{}.pdf'.format(invx_number),
                 'type': 'binary',
-                'datas': base64.b64encode(content),
+                'raw': content,
                 'res_model': 'account.move',
                 'res_id': self.id,
                 'mimetype': 'application/pdf'
@@ -440,7 +440,7 @@ class AccountInvoiceCancelWizard(models.TransientModel):
                         self.env['ir.attachment'].create({
                             'name': '{}_Anulada.pdf'.format(move.name),
                             'type': 'binary',
-                            'datas': base64.b64encode(content),
+                            'raw': content,
                             'res_model': 'account.move',
                             'res_id': move.id,
                             'mimetype': 'application/pdf'

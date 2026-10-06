@@ -7,7 +7,7 @@ from odoo import fields
 from odoo.tests import Form, common
 
 from odoo.addons.l10n_pt_account_bill.tests.test_bill import (
-    TestBill,
+    TestBILL as TestBill,
 )
 
 
