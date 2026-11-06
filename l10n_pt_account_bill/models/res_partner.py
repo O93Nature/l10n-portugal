@@ -14,7 +14,7 @@ class ResPartner(models.Model):
         vals = {
             "nome": self.name,
             "pais": self.country_id.code if self.country_id else "PT",
-            "codigo": "ODOO-A{}".format(self.ref or self.id),
+            "codigo": "A{}".format(self.ref or self.id),
             "nif": self.vat,
             "email": self.email,
             "morada": ", ".join(filter(None, [self.street, self.street2])),
@@ -26,7 +26,7 @@ class ResPartner(models.Model):
 
     def set_bill_contact(self):
         self.ensure_one()
-        self.vat and self.check_vat()  # Double check VAT is right
+        self.vat and self._check_vat()  # Double check VAT is right (Odoo 20: check_vat -> _check_vat)
         BILL = self.env["account.bill"]
         company = self.company_id or self.env.company
         doctype = "contatos"
@@ -67,7 +67,7 @@ class ResPartner(models.Model):
                 )
             except Exception as e:
                 # Create: POST /clients.json
-                vals["codigo"]  = "ODOO-B{}".format(self.ref or self.id)
+                vals["codigo"]  = "B{}".format(self.ref or self.id)
                 response = BILL.call(
                     company,
                     doctype,

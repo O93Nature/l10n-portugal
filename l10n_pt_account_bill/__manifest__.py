@@ -17,7 +17,7 @@
         "views/account_journal_view.xml",
         "views/account_tax_view.xml",
         "views/account_move_view.xml",
-        #"views/account_payment_view.xml",
+        "views/account_payment_view.xml",
         "views/res_company_view.xml",
         "views/res_country_view.xml",
         "data/mail_template.xml",

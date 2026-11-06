@@ -1,2 +1,4 @@
 id,name,model_id,group_id/id,operation,domain
 access_account_invoice_cancel_wizard,access_account_invoice_cancel_wizard,account.invoice.cancel.wizard,base.group_everyone,cru,
+access_account_payment_receipt_cancel_wizard,access_account_payment_receipt_cancel_wizard,account.payment.receipt.cancel.wizard,base.group_everyone,cru,
+access_account_bill_pdf_preview,access_account_bill_pdf_preview,account.bill.pdf.preview,base.group_everyone,cru,

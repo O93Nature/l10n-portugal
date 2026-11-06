@@ -13,7 +13,38 @@ class AccountMove(models.Model):
 
     process = fields.Many2one('sale.order', string='Processo')
     defunct = fields.Char(string='Falecido')
-    
+
+    has_bill_receipt = fields.Boolean(
+        string="Tem recibo BILL",
+        compute="_compute_has_bill_receipt")
+
+    def _compute_has_bill_receipt(self):
+        for move in self:
+            receipts = self.env["account.payment"]
+            if move.is_invoice(include_receipts=True):
+                receipts = move._get_reconciled_payments().filtered(
+                    lambda p: p.move_id.bill_id and p.move_id.state != "cancel")
+            move.has_bill_receipt = bool(receipts)
+
+    def action_open_bill_receipt_cancel_wizard(self):
+        """Anular o(s) recibo(s) BILL reconciliados com esta fatura."""
+        self.ensure_one()
+        payments = self._get_reconciled_payments().filtered(
+            lambda p: p.move_id.bill_id and p.move_id.state != "cancel")
+        if not payments:
+            raise UserError(_("Esta fatura não tem recibo BILL por anular."))
+        return {
+            "type": "ir.actions.act_window",
+            "name": _("Anular Recibo"),
+            "res_model": "account.payment.receipt.cancel.wizard",
+            "view_mode": "form",
+            "target": "new",
+            "context": {
+                "active_ids": payments.ids,
+                "active_model": "account.payment",
+            },
+        }
+
     @api.depends("restrict_mode_hash_table", "state")
     def _compute_show_reset_to_draft_button(self):
         super()._compute_show_reset_to_draft_button()
@@ -117,6 +148,11 @@ class AccountMove(models.Model):
         # FIXME: set user lang, based on country?
         lines = self.invoice_line_ids.filtered(
             lambda l: l.display_type not in ("line_section", "line_note")
+            # Ignorar linhas vazias/abandonadas (sem produto E preço 0, ex. a
+            # linha "partici" deixada a meio) — nunca devem ir para o documento
+            # certificado no app.bill.pt. Linhas sem produto mas com preço são
+            # legítimas (ex. encargos digitados à mão) e mantêm-se.
+            and not (not l.product_id and l.price_unit == 0)
         )
         # Ensure Taxes are created on BILL
         #lines.mapped("tax_ids").action_bill_tax_create()
@@ -127,8 +163,12 @@ class AccountMove(models.Model):
             tax_detail = {"name": tax.name or "IVA0", "value": tax.amount or 0.0}
             items.update(
                 {
-                    "produtos[{}][codigo]".format(i): line.product_id.default_code,
-                    "produtos[{}][nome]".format(i): line.product_id.name,
+                    # Nunca enviar "False": artigos sem referência interna
+                    # (default_code vazio) ou linhas sem produto mandavam o
+                    # literal False como código. Código vazio e nome a partir da
+                    # descrição da linha quando não há produto.
+                    "produtos[{}][codigo]".format(i): line.product_id.default_code or '',
+                    "produtos[{}][nome]".format(i): line.product_id.name or line._get_bill_descr(),
                     "produtos[{}][quantidade]".format(i): line.quantity,
                     "produtos[{}][preco_unitario]".format(i): line.price_unit,
                     "produtos[{}][unidade_medida_id]".format(i): 20842,
@@ -326,23 +366,92 @@ class AccountMove(models.Model):
                 )
                 invoice.message_post(body=msg)
 
+    def action_print_pdf(self):
+        # "Imprimir" nas faturas/NC de CLIENTE abre o documento CERTIFICADO num
+        # WIZARD (diálogo de pré-visualização), nunca o PDF interno do Odoo.
+        self.ensure_one()
+        if self.move_type in ('out_invoice', 'out_refund'):
+            # O PDF certificado tem o nome do documento (ex. "FT BILL/208.pdf"),
+            # o que o distingue do recibo ("RC BILL/...") e do PDF interno.
+            att = self.env['ir.attachment'].search([
+                ('res_model', '=', 'account.move'), ('res_id', '=', self.id),
+                ('mimetype', '=', 'application/pdf'),
+                ('name', '=', '%s.pdf' % self.name)], limit=1)
+            if att:
+                wiz = self.env['account.bill.pdf.preview'].create({
+                    'pdf_file': base64.b64encode(att.raw).decode(),
+                    'pdf_name': att.name})
+                return {
+                    'type': 'ir.actions.act_window',
+                    'name': att.name,
+                    'res_model': 'account.bill.pdf.preview',
+                    'res_id': wiz.id,
+                    'view_mode': 'form',
+                    'target': 'new',
+                }
+            if self.bill_permalink:
+                return {'type': 'ir.actions.act_url',
+                        'url': self.bill_permalink, 'target': 'new'}
+        return super().action_print_pdf()
+
     def _post(self, soft=False):
         res = super()._post(soft=soft)
         for invoice in self:
             if not invoice.bill_id:
+                # Salvaguarda: não re-certificar documentos já certificados
+                # noutro sistema (ex. faturas importadas do Odoo 14). Essas têm
+                # o PDF certificado anexado (<nome>.pdf) mas não têm bill_id —
+                # reconfirmá-las NÃO pode emitir um duplicado no app.bill.pt.
+                # Faturas realmente novas ainda não têm esse PDF, logo certificam.
+                already_certified = self.env['ir.attachment'].search_count([
+                    ('res_model', '=', 'account.move'),
+                    ('res_id', '=', invoice.id),
+                    ('mimetype', '=', 'application/pdf'),
+                    ('name', '=', '%s.pdf' % invoice.name)])
+                if already_certified:
+                    continue
                 invoice._check_bill_doctype_config()
+                invoice._check_bill_lines_product()
                 invoice.action_create_bill_invoice()
                 invoice.action_send_bill_email(ignore_no_config=True)
         return res
+
+    def _check_bill_lines_product(self):
+        """Antes de emitir no BILL, exigir um artigo em cada linha de produto.
+        Linhas de texto livre (sem artigo) saíam sem código no documento
+        certificado — obriga-se a escolher um artigo do catálogo."""
+        self.ensure_one()
+        bad = self.invoice_line_ids.filtered(
+            lambda l: l.display_type == 'product' and not l.product_id)
+        if bad:
+            raise exceptions.UserError(_(
+                "Antes de emitir no BILL, cada linha tem de ter um artigo do "
+                "catálogo. Linhas sem artigo:\n%s"
+            ) % "\n".join("• %s" % (l.name or '(sem descrição)') for l in bad))
+
+
+class AccountBillPdfPreview(models.TransientModel):
+    _name = 'account.bill.pdf.preview'
+    _description = "Pré-visualização do documento certificado"
+
+    pdf_file = fields.Binary(string="Documento", readonly=True)
+    pdf_name = fields.Char()
 
 class AccountPaymentRegister(models.TransientModel):
     _inherit = 'account.payment.register'
 
     def action_create_payments(self):
         payments = self._create_payments()
-        
-        if not payments['payment_state']:
-            payments.action_create_bill_receipt()
+
+        # Criar o recibo BILL por cada pagamento DE CLIENTE (inbound) que ainda
+        # não tenha recibo. Antes era `if not payments['payment_state']`, mas
+        # `payment_state` é campo do account.move (o account.payment delegava-o
+        # via _inherits no Odoo antigo; no 20 já NÃO delega) → KeyError ao gerar
+        # o recibo. A existência de recibo deteta-se por move_id.bill_id
+        # (ver has_bill_receipt).
+        for payment in payments:
+            if payment.payment_type == 'inbound' and not payment.move_id.bill_id:
+                payment.action_create_bill_receipt()
 
         if self.env.context.get('dont_redirect_to_payments'):
             return True

@@ -21,35 +21,37 @@
             </xpath>
             <xpath expr="//header" position="inside">
                 <button name="%(l10n_pt_account_bill.action_open_cancel_wizard)d"
-                        string="Anular"
+                        string="Anular Fatura"
                         type="action"
-                        class="btn-danger"
+                        class="btn-outline-danger"
                         invisible="state == 'cancel'"/>
+                <field name="has_bill_receipt" invisible="1"/>
+                <button name="action_open_bill_receipt_cancel_wizard"
+                        string="Anular Recibo"
+                        type="object"
+                        class="btn btn-outline-warning"
+                        style="color:#b5721a !important;border-color:#d8872a !important;"
+                        invisible="has_bill_receipt == False"/>
             </xpath>
 
             <div name="journal_div" position="after">
                 <field name="can_bill" invisible="1" />
                 <field name="can_bill_email" invisible="1" />
-                <field
-                    name="bill_doc_type"
-                    readonly="posted_before == True" invisible="can_bill == False"
-                />
                 <field name="process" readonly="1"/>
                 <field name="defunct" readonly="1"/>
 
             </div>
 
-            <xpath expr="//notebook//page[@name='other_info']" position="after">
-                <page
-                    name="bill"
-                    string="BILL"
-                    invisible="bill_id == False"
-                >
-                    <group>
-                        <field name="bill_id" />
-                        <field name="bill_permalink" widget="url" />
-                    </group>
-                </page>
+            <!-- BILL deixou de ter separador próprio: os campos vivem agora
+                 dentro de "Outra informação". O permalink é só de leitura. -->
+            <xpath expr="//notebook//page[@name='other_info']" position="inside">
+                <group string="BILL" name="bill_group"
+                        invisible="bill_id == False and can_bill == False">
+                    <field name="bill_doc_type" readonly="posted_before == True"/>
+                    <field name="bill_id" invisible="bill_id == False"/>
+                    <field name="bill_permalink" widget="url" readonly="1"
+                        invisible="bill_id == False"/>
+                </group>
             </xpath>
             <button name="action_invoice_sent" position="attributes">
                 <attribute name="invisible">can_bill == True</attribute>
@@ -85,6 +87,21 @@
                 <footer>
                     <button string="Confirmar" type="object" name="action_confirm_cancel" class="btn-primary"/>
                     <button string="Cancelar" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- Diálogo de pré-visualização do documento certificado (o Imprimir abre isto). -->
+    <record id="account_bill_pdf_preview_form" model="ir.ui.view">
+        <field name="name">account.bill.pdf.preview.form</field>
+        <field name="model">account.bill.pdf.preview</field>
+        <field name="arch" type="xml">
+            <form class="o_fm_pdf_dialog">
+                <field name="pdf_name" invisible="1"/>
+                <field name="pdf_file" widget="pdf_viewer_full" filename="pdf_name" nolabel="1"/>
+                <footer>
+                    <button string="Fechar" special="cancel" class="btn-secondary"/>
                 </footer>
             </form>
         </field>

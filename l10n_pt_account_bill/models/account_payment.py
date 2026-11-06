@@ -2,7 +2,9 @@
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 
 import uuid
+import json
 import base64
+from datetime import datetime
 from odoo import _, api, exceptions, fields, models
 
 
@@ -99,18 +101,16 @@ class AccountPayment(models.Model):
             raise exceptions.UserError(
                 _("Something went wrong: the BILL response looks empty.")
             )
-        self.bill_id = values.get("id")
-
-        '''invx_number = values.get("invoice_number")
-        if invoice.payment_reference == invoice.name:
-            invoice.payment_reference = invx_number'''
-
-        self.name = values.get('invoice_number')
+        # No Odoo 20 o account.payment NÃO delega para o move (não há _inherits):
+        # o bill_id/nome do recibo têm de ficar no PRÓPRIO lançamento (move_id),
+        # que é onde a deteção (has_bill_receipt) e o wizard de anulação os leem.
+        self.move_id.bill_id = values.get("id")
+        self.move_id.name = values.get('invoice_number') or self.move_id.name
         #self._update_bill_status()
         receipt_details = BILL.call(self.company_id, "documentos/{}".format(values.get("id")), "GET").json()
         token_download = receipt_details['token_download']
 
-        response = BILL.call(self.company_id, "documentos/download/{}/{}".format(self.bill_id, token_download), "GET", payload=payload)
+        response = BILL.call(self.company_id, "documentos/download/{}/{}".format(values.get("id"), token_download), "GET", payload=payload)
         content = response.content.replace(b'/JS', b'//JS')
 
         attachment = self.env['ir.attachment'].create({
@@ -182,3 +182,110 @@ class AccountPayment(models.Model):
                     payload["message"]["cc"] or _("None"),
                 )
                 invoice.message_post(body=msg)
+
+    # No Odoo 20 o bill_id/nome do recibo vivem no MOVE (pay.move_id), não no
+    # account.payment (ao contrário do 14, que delega por _inherits).
+    fm_has_bill_receipt = fields.Boolean(
+        string="Recibo BILL por anular",
+        compute="_compute_fm_has_bill_receipt")
+
+    @api.depends("move_id.bill_id", "move_id.state")
+    def _compute_fm_has_bill_receipt(self):
+        for pay in self:
+            pay.fm_has_bill_receipt = bool(
+                pay.move_id.bill_id and pay.move_id.state != "cancel")
+
+    def action_open_receipt_cancel_wizard(self):
+        """Abre o diálogo para anular o recibo (RC …) no BILL."""
+        return {
+            "type": "ir.actions.act_window",
+            "name": _("Anular Recibo"),
+            "res_model": "account.payment.receipt.cancel.wizard",
+            "view_mode": "form",
+            "target": "new",
+            "context": {"active_ids": self.ids, "active_model": "account.payment"},
+        }
+
+
+class AccountPaymentReceiptCancelWizard(models.TransientModel):
+    _name = "account.payment.receipt.cancel.wizard"
+    _description = "Anular Recibo (BILL)"
+
+    reason = fields.Char(string="Motivo da Anulação", required=True, size=200)
+
+    def action_confirm_cancel(self):
+        """Anula o recibo no BILL (certificado) e desfaz o pagamento: anexa o
+        PDF anulado (ao pagamento e à fatura), desreconcilia (a fatura volta a
+        "não pago") e cancela o lançamento do recibo. Espelha o wizard das
+        faturas, adaptado à API do Odoo 20 (bill_id no move, account_type,
+        raw, remove_move_reconcile)."""
+        active_ids = self.env.context.get("active_ids")
+        if not active_ids:
+            raise exceptions.UserError(_("Nenhum recibo selecionado."))
+        payments = self.env["account.payment"].browse(active_ids)
+        BILL = self.env["account.bill"]
+        for pay in payments:
+            move = pay.move_id
+            if move.state == "cancel":
+                continue
+            bid = move.bill_id
+            if not bid:
+                raise exceptions.UserError(
+                    _("Este pagamento não tem recibo BILL para anular.")
+                )
+            rc_name = move.name
+            # 1) Anular no BILL (mesmo endpoint das faturas).
+            payload = {
+                "id": bid,
+                "motivo_anular": self.reason,
+                "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            try:
+                BILL.call(pay.company_id, "documentos", "PATCH", payload=payload).json()
+            except Exception:
+                raise exceptions.UserError(
+                    _("Não foi possível anular o recibo %s no BILL.") % rc_name
+                )
+            # Anexar o PDF anulado ao pagamento E à(s) fatura(s) — antes da
+            # desreconciliação, que esvazia reconciled_invoice_ids.
+            try:
+                doc = BILL.call(pay.company_id, "documentos/{}".format(bid), "GET")
+                data = json.loads(doc.content)
+                if data.get("estado") == "A":
+                    token = data.get("token_download")
+                    resp = BILL.call(
+                        pay.company_id,
+                        "documentos/download/{}/{}".format(bid, token),
+                        "GET",
+                        payload=payload,
+                    )
+                    content = resp.content.replace(b"/JS", b"//JS")
+                    targets = [("account.payment", pay.id)]
+                    targets += [
+                        ("account.move", inv.id)
+                        for inv in pay.reconciled_invoice_ids
+                    ]
+                    for model, rid in targets:
+                        self.env["ir.attachment"].create(
+                            {
+                                "name": "{}_Anulado.pdf".format(rc_name),
+                                "type": "binary",
+                                "raw": content,
+                                "res_model": model,
+                                "res_id": rid,
+                                "mimetype": "application/pdf",
+                            }
+                        )
+            except Exception:
+                pass
+            # 2) Desreconciliar + cancelar o lançamento do recibo.
+            recon_lines = move.line_ids.filtered(
+                lambda l: l.account_type in ("asset_receivable", "liability_payable")
+            )
+            recon_lines.remove_move_reconcile()
+            move.write({"state": "cancel"})
+            pay.message_post(
+                body=_("Recibo %s anulado no BILL. Motivo: %s")
+                % (rc_name, self.reason)
+            )
+        return {"type": "ir.actions.act_window_close"}
