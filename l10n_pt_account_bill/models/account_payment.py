@@ -138,8 +138,22 @@ class AccountPayment(models.Model):
         # No Odoo 20 o account.payment NÃO delega para o move (não há _inherits):
         # o bill_id/nome do recibo têm de ficar no PRÓPRIO lançamento (move_id),
         # que é onde a deteção (has_bill_receipt) e o wizard de anulação os leem.
+        # O bill_id é o que LIGA ao recibo (deteção/anulação) -> grava-se sempre.
         self.move_id.bill_id = values.get("id")
-        self.move_id.name = values.get('invoice_number') or self.move_id.name
+        # O nome do recibo (RC BILL/NNN) pode colidir com outro move: a sequência
+        # de pagamentos do Odoo e a sequência de recibos do BILL são independentes
+        # e podem divergir (ex. um pagamento de banco apanhou o nome RC BILL/NNN).
+        # Só renomeamos se o nome estiver livre; senão mantemos o nome atual e o
+        # vínculo fica garantido pelo bill_id.
+        new_name = values.get("invoice_number")
+        if new_name and new_name != self.move_id.name:
+            clash = self.env["account.move"].search_count([
+                ("name", "=", new_name),
+                ("company_id", "=", self.move_id.company_id.id),
+                ("id", "!=", self.move_id.id),
+            ])
+            if not clash:
+                self.move_id.name = new_name
         #self._update_bill_status()
         receipt_details = BILL.call(self.company_id, "documentos/{}".format(values.get("id")), "GET").json()
         token_download = receipt_details['token_download']

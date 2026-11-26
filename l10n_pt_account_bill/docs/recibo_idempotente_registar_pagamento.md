@@ -52,3 +52,21 @@ A causa de fundo é a não-transacionalidade: idealmente o POST ao BILL devia se
 o **último** passo (ou o PDF/anexos deviam ser tolerantes a falha) para não
 deixar recibos órfãos. A idempotência acima resolve o impacto, mas convém rever
 a ordem das operações em `action_create_bill_receipt`.
+
+## 2.º obstáculo: colisão de nome (RC BILL/NNN)
+Depois da idempotência, o passo `move_id.name = recibo_number` rebentava com
+*"Já existe um lançamento com o mesmo nome"*. Causa: o diário **Banco** numera
+**todos** os pagamentos (inbound E outbound) com o prefixo `RC BILL/` (série
+semeada nos dados, não no código). Um pagamento de **fornecedor** (outbound,
+ex. pay 208 = BILL/2026/11/0020) apanhou `RC BILL/193`, colidindo com o número
+que o BILL deu ao recibo de cliente da FT BILL/225.
+
+**Mitigação aplicada:** em `action_create_bill_receipt`, o `bill_id` (vínculo
+ao recibo, usado pela deteção/anulação) grava-se sempre; o **nome** só é
+aplicado se estiver livre. A FT BILL/225 ficou paga com o pagamento nomeado
+`RC BILL/194` e `bill_id=4357724` (recibo `RC BILL/193` no BILL).
+
+**Causa de fundo (pendente):** os pagamentos de **fornecedor/outbound** não
+deviam consumir a série `RC BILL/` (reservada a recibos certificados de
+cliente). Falta dar-lhes série própria (ex. `PBNK1/`), senão a numeração
+Odoo↔BILL continua a divergir e a colidir.
