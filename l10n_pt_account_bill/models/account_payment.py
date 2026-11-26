@@ -92,11 +92,45 @@ class AccountPayment(models.Model):
         ).format(inv_xpress_id=self.bill_id, inv_xpress_link=inv_xpress_link)
         self.message_post(body=msg)
 
+    def _get_existing_bill_receipt(self):
+        """Se a(s) fatura(s) reconciliada(s) já tiverem recibo no BILL, devolve
+        {'id':..., 'invoice_number':...} do recibo existente.
+
+        Cenário: uma tentativa anterior de "Criar Pagamento" criou o recibo no
+        BILL (POST com sucesso) mas a transação do Odoo fez rollback a seguir
+        (o POST ao BILL não é transacional). O recibo fica órfão no BILL e, ao
+        repetir, o BILL recusa um 2.º recibo sobre o mesmo documento com
+        "documento_id is invalid". Nesse caso adotamos o recibo existente em
+        vez de criar outro."""
+        BILL = self.env["account.bill"]
+        inv = self.reconciled_invoice_ids[:1]
+        if not inv or not inv.bill_id:
+            return False
+        try:
+            doc = BILL.call(
+                inv.company_id, "documentos/{}".format(int(inv.bill_id)), "GET"
+            ).json()
+        except Exception:  # noqa: BLE001 - na dúvida segue o fluxo normal
+            return False
+        for rec in doc.get("pago_por") or []:
+            recdoc = rec.get("documento") or {}
+            rec_id = rec.get("documento_id") or recdoc.get("id")
+            if rec_id:
+                return {
+                    "id": rec_id,
+                    "invoice_number": recdoc.get("invoice_number"),
+                }
+        return False
+
     def action_create_bill_receipt(self):
         BILL = self.env["account.bill"]
 
-        payload = self._prepare_receipt_vals()
-        values = BILL.call(self.company_id, "recibos", "POST", payload=payload).json()
+        values = self._get_existing_bill_receipt()
+        if not values:
+            payload = self._prepare_receipt_vals()
+            values = BILL.call(
+                self.company_id, "recibos", "POST", payload=payload
+            ).json()
         if not values:
             raise exceptions.UserError(
                 _("Something went wrong: the BILL response looks empty.")
@@ -110,7 +144,7 @@ class AccountPayment(models.Model):
         receipt_details = BILL.call(self.company_id, "documentos/{}".format(values.get("id")), "GET").json()
         token_download = receipt_details['token_download']
 
-        response = BILL.call(self.company_id, "documentos/download/{}/{}".format(values.get("id"), token_download), "GET", payload=payload)
+        response = BILL.call(self.company_id, "documentos/download/{}/{}".format(values.get("id"), token_download), "GET")
         content = response.content.replace(b'/JS', b'//JS')
 
         attachment = self.env['ir.attachment'].create({
