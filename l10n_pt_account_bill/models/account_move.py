@@ -7,12 +7,36 @@ import json
 from odoo import _, api, exceptions, fields, models
 from datetime import datetime
 from odoo.exceptions import UserError
+from odoo.tools import SQL
 
 class AccountMove(models.Model):
     _inherit = "account.move"
 
     process = fields.Many2one('sale.order', string='Processo')
     defunct = fields.Char(string='Falecido')
+
+    def _get_last_sequence_domain(self, relaxed=False):
+        # EXTENDS account (sequence.mixin).
+        # Os recibos certificados de cliente recebem o nome "RC BILL/NNN"
+        # DIRETAMENTE do BILL (escrito a força em move.name em
+        # account.payment.action_create_bill_receipt) — NÃO é uma sequência do
+        # Odoo. Esses nomes poluíam a deteção da sequência dos PAGAMENTOS deste
+        # diário: um pagamento normal seguinte via "RC BILL/192" como último e
+        # continuava "RC BILL/193" (invadindo a série dos recibos) em vez de usar
+        # a série própria dos pagamentos de banco (PBNK1/...). Excluímos os nomes
+        # "RC BILL/" da sequência dos pagamentos para manter as séries separadas.
+        is_payment = self.origin_payment_id or self.env.context.get("is_payment")
+        exclude_rc = is_payment and not (self.name or "").startswith("RC BILL/")
+        source = self
+        if exclude_rc:
+            # Sem no_anti_regex: se o último pagamento for um recibo ("RC BILL/",
+            # reset deduzido = 'never'), o anti_regex do core excluiria os
+            # formatos anuais (PBNK1/2026/) e a sequência reiniciaria em 00001.
+            source = self.with_context(no_anti_regex=True)
+        condition = super(AccountMove, source)._get_last_sequence_domain(relaxed=relaxed)
+        if exclude_rc:
+            condition = SQL("%s AND name NOT LIKE 'RC BILL/%%'", condition)
+        return condition
 
     has_bill_receipt = fields.Boolean(
         string="Tem recibo BILL",
@@ -397,7 +421,14 @@ class AccountMove(models.Model):
     def _post(self, soft=False):
         res = super()._post(soft=soft)
         for invoice in self:
-            if not invoice.bill_id:
+            # Só os documentos de VENDA (FT/FR/FS/NC/ND) se certificam aqui. O
+            # _post corre para QUALQUER account.move — incluindo o lançamento do
+            # pagamento, cujas linhas "Manual Payment" têm display_type='product'
+            # sem produto e faziam o _check_bill_lines_product rebentar
+            # ("Operação inválida: cada linha tem de ter um artigo"). Os RECIBOS
+            # de pagamento saem por account.payment.action_create_bill_receipt,
+            # não por este caminho de certificação de faturas.
+            if not invoice.bill_id and invoice.is_sale_document(include_receipts=True):
                 # Salvaguarda: não re-certificar documentos já certificados
                 # noutro sistema (ex. faturas importadas do Odoo 14). Essas têm
                 # o PDF certificado anexado (<nome>.pdf) mas não têm bill_id —

@@ -70,3 +70,27 @@ aplicado se estiver livre. A FT BILL/225 ficou paga com o pagamento nomeado
 deviam consumir a série `RC BILL/` (reservada a recibos certificados de
 cliente). Falta dar-lhes série própria (ex. `PBNK1/`), senão a numeração
 Odoo↔BILL continua a divergir e a colidir.
+
+## Correção de fundo: separar série dos pagamentos (override de sequência)
+Como os recibos escrevem `move.name = "RC BILL/NNN"` (nome vindo do BILL, não
+uma sequência Odoo), a deteção de sequência dos pagamentos deste diário era
+poluída: o pagamento seguinte sem recibo continuava "RC BILL/NNN".
+
+`account_move.py` passa a estender `_get_last_sequence_domain`: para moves de
+**pagamento** que não sejam recibos, exclui os nomes `RC BILL/%` da continuação
+de sequência (e força `no_anti_regex` para não reiniciar em 00001 quando o
+último move é um recibo). Assim:
+- recibos de cliente → `RC BILL/NNN` (nome do BILL, série certificada);
+- restantes pagamentos (banco/fornecedor) → `PBNK1/2026/NNNNN` (série própria).
+
+Validado por dry-run: novo pagamento outbound sai `PBNK1/2026/NNNNN`.
+
+Limpeza pontual feita nos dados (prod):
+- pagamento de fornecedor que tinha apanhado `RC BILL/193` → renomeado para
+  `PBNK1/2026/00176`;
+- pagamento da FT BILL/225 (`RC BILL/194`, com `bill_id=4357724`) → alinhado
+  para `RC BILL/193` (= nº real do recibo no BILL), deixando `RC BILL/194`
+  livre para o próximo recibo.
+
+Pré-dump: `/root/odoo20_backups/odoo20_prod_pre_seq_*.dump` (PG16). Só Python
+(restart, sem -u).
