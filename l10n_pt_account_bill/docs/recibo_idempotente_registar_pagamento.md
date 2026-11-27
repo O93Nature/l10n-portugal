@@ -94,3 +94,12 @@ Limpeza pontual feita nos dados (prod):
 
 Pré-dump: `/root/odoo20_backups/odoo20_prod_pre_seq_*.dump` (PG16). Só Python
 (restart, sem -u).
+
+## Transacionalidade: PDF/anexo passam a best-effort
+O POST `/recibos` ao BILL (criação do recibo) já não é seguido por passos que
+possam rebentar a transação. Depois de criar o recibo e gravar `bill_id`/nome,
+o download do PDF + anexos + `message_post` ficam dentro de `try/except`: se
+falharem, regista-se no log (`_logger.exception`) e o pagamento mantém-se
+registado — o recibo deixa de ficar órfão. O PDF pode ser obtido depois (a
+deteção/anulação usam o `bill_id`, não o anexo). Corrigido também bug latente:
+`reconciled_invoice_ids.id` (singleton) → loop por fatura.

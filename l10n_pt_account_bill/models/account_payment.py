@@ -1,11 +1,14 @@
 # Copyright (C) 2021 Open Source Integrators
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 
+import logging
 import uuid
 import json
 import base64
 from datetime import datetime
 from odoo import _, api, exceptions, fields, models
+
+_logger = logging.getLogger(__name__)
 
 
 class AccountPayment(models.Model):
@@ -155,31 +158,45 @@ class AccountPayment(models.Model):
             if not clash:
                 self.move_id.name = new_name
         #self._update_bill_status()
-        receipt_details = BILL.call(self.company_id, "documentos/{}".format(values.get("id")), "GET").json()
-        token_download = receipt_details['token_download']
+        # A partir daqui é "best effort": o recibo JÁ está criado no BILL e o
+        # bill_id/nome já ficaram gravados. Descarregar o PDF e anexá-lo não é
+        # crítico; se falhar NÃO pode rebentar (rollback) a transação, senão o
+        # recibo fica órfão no BILL e a fatura impossível de pagar pelo fluxo
+        # normal. Em caso de falha, regista-se e segue — o PDF pode ser obtido
+        # depois (a deteção/anulação usam o bill_id, não o anexo).
+        try:
+            receipt_details = BILL.call(self.company_id, "documentos/{}".format(values.get("id")), "GET").json()
+            token_download = receipt_details['token_download']
 
-        response = BILL.call(self.company_id, "documentos/download/{}/{}".format(values.get("id"), token_download), "GET")
-        content = response.content.replace(b'/JS', b'//JS')
+            response = BILL.call(self.company_id, "documentos/download/{}/{}".format(values.get("id"), token_download), "GET")
+            content = response.content.replace(b'/JS', b'//JS')
 
-        attachment = self.env['ir.attachment'].create({
-            'name': '{}.pdf'.format(values.get('invoice_number')),
-            'type': 'binary',
-            'raw': content,
-            'res_model': 'account.payment',
-            'res_id': self.id,
-            'mimetype': 'application/pdf'
-        })
-        
-        attachment = self.env['ir.attachment'].create({
-            'name': '{}.pdf'.format(values.get('invoice_number')),
-            'type': 'binary',
-            'raw': content,
-            'res_model': 'account.move',
-            'res_id': self.reconciled_invoice_ids.id,
-            'mimetype': 'application/pdf'
-        })
+            attachment = self.env['ir.attachment'].create({
+                'name': '{}.pdf'.format(values.get('invoice_number')),
+                'type': 'binary',
+                'raw': content,
+                'res_model': 'account.payment',
+                'res_id': self.id,
+                'mimetype': 'application/pdf'
+            })
 
-        self.with_context(no_new_invoice=True).message_post(attachment_ids=[attachment.id])
+            for inv in self.reconciled_invoice_ids:
+                self.env['ir.attachment'].create({
+                    'name': '{}.pdf'.format(values.get('invoice_number')),
+                    'type': 'binary',
+                    'raw': content,
+                    'res_model': 'account.move',
+                    'res_id': inv.id,
+                    'mimetype': 'application/pdf'
+                })
+
+            self.with_context(no_new_invoice=True).message_post(attachment_ids=[attachment.id])
+        except Exception:  # noqa: BLE001 - PDF/anexo é best-effort, não aborta o pagamento
+            _logger.exception(
+                "BILL: recibo %s criado (bill_id=%s) mas falhou o download/anexo do PDF; "
+                "pagamento %s mantém-se registado.",
+                values.get("invoice_number"), values.get("id"), self.id,
+            )
 
     def _prepare_bill_email_vals(self, ignore_no_config=False):
         self.ensure_one()
