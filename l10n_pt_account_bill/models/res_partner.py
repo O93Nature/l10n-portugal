@@ -1,13 +1,40 @@
 # Copyright (C) 2021 Open Source Integrators
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 
-from odoo import fields, models
+from odoo import _, exceptions, fields, models
 
 
 class ResPartner(models.Model):
     _inherit = "res.partner"
 
     bill_id = fields.Char("BILL ID", copy=False, readonly=True)
+
+    def _bill_find_existing_contact(self, vals):
+        """O BILL respondeu "já existe" (231/253): localizar o contacto.
+
+        Primeiro por `codigo`; se vier vazio — típico de clientes criados no
+        Odoo 14, cujo `res.partner.bill_id` NÃO foi migrado e cujo código no
+        BILL não bate com o "A{id}" novo — procura-se por **NIF** (o duplicado é
+        detetado pelo NIF). Só o param `pesquisa[nif]` filtra mesmo por NIF; o
+        `numero_contribuinte`/`contribuinte` são ignorados e devolvem lixo."""
+        self.ensure_one()
+        BILL = self.env["account.bill"]
+        company = self.company_id or self.env.company
+        for params in (
+            {"pesquisa[codigo]": vals.get("codigo")},
+            {"pesquisa[nif]": vals.get("nif")},
+        ):
+            if not list(params.values())[0]:
+                continue
+            data = (BILL.call(company, "contatos", "GET", payload=params).json()
+                    or {}).get("data") or []
+            if data:
+                return data[0]
+        raise exceptions.UserError(_(
+            "O cliente '%s' (NIF %s) já existe no BILL mas não foi possível "
+            "localizá-lo por código nem por NIF. Defina o BILL ID manualmente "
+            "no separador de contabilidade do cliente."
+        ) % (self.name, self.vat or "—"))
 
     def _prepare_bill_vals(self):
         self.ensure_one()
@@ -48,11 +75,11 @@ class ResPartner(models.Model):
                     "GET",
                     payload={"pesquisa[codigo]": vals["codigo"]},
                 )
-                values = response.json()['data'][0]
+                values = self._bill_find_existing_contact(vals)
                 invx_id_to_update = values.get("id")  # Update is needed!
             else:
                 values = response.json()
-            
+
             self.bill_id = values.get("id")
 
         if invx_id_to_update:
@@ -82,7 +109,7 @@ class ResPartner(models.Model):
                         "GET",
                         payload={"pesquisa[codigo]": vals["codigo"]},
                     )
-                    values = response.json()['data'][0]
+                    values = self._bill_find_existing_contact(vals)
                     invx_id_to_update = values.get("id")  # Update is needed!
                 else:
                     values = response.json()
